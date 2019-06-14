@@ -43,14 +43,16 @@ import sys
 import os
 
 # Matches an event type header that precedes a collection of associated rules
-EVENT_PATT = re.compile(" - (?P<event_type>.*?)\s*onmatch: (?P<match_condition>.*?)\s{3,}combine rules using '(?P<operator>.*)'")
+OLD_EVENT_PATT = re.compile(" - (?P<event_type>.*?)\s*onmatch: (?P<onmatch>.*)'")
+
+# Newer versions of Sysmon allow users to specify a boolean operator for the rulegroup
+NEW_EVENT_PATT = re.compile(" - (?P<event_type>.*?)\s*onmatch: (?P<onmatch>.*?)\s{3,}combine rules using '(?P<operator>.*)'")
 
 # Matches an individual rule
 RULE_PATT = re.compile("\t(?P<field>.*?)\s*filter: (?P<filter>.*?)\s{3,}value: '(?P<value>.*)'")
 
 
-
-def write_header(output_file, header_info):
+def write_output(output_file, header_info, rules):
   with open(output_file, 'w') as out_file:
     out_file.writelines('<Sysmon schemaversion="4.21">\n')
     out_file.writelines('\t<HashAlgorithms>%s</HashAlgorithms>\n' % header_info['algorithms'].lower())
@@ -59,24 +61,28 @@ def write_header(output_file, header_info):
       out_file.writelines('\t<CheckRevocation/>\n')
     
     out_file.writelines('\t<EventFiltering>\n')
-
-
-
-def write_rule_group(output_file, rule_config, rule_group):
-  with open(output_file, 'a') as out_file:
-    out_file.writelines('\t<RuleGroup name="" groupRelation="%s">\n' % rule_config['operator'].lower())
-    out_file.writelines('\t\t<%s onmatch="%s">\n' % (rule_config['event_type'], rule_config['match_condition']))
     
-    for rule in rule_group:
-      out_file.writelines('\t\t\t<{0} condition="{1}">{2}</{0}>\n'.format(rule['field'], rule['filter'], rule['value']))
-
-    out_file.writelines('\t\t</%s>\n' % rule_config['event_type'])
-    out_file.writelines('\t</RuleGroup>\n\n')
-
-
-
-def write_footer(output_file):
-  with open(output_file, 'a') as out_file:
+    # List event types to ensure they are written to the file in matching order
+    events = ['ProcessCreate', 'FileCreateTime', 'NetworkConnect', 'ProcessTerminate', 'DriverLoad', 'ImageLoad', 'CreateRemoteThread', 'RawAccessRead', 'ProcessAccess', 'FileCreate', 'RegistryEvent', 'FileCreateStreamHash', 'PipeEvent', 'WmiEvent', 'DnsQuery']
+    
+    for event_type in events:
+      if event_type in rules:
+        for operator in rules[event_type].keys():
+          if operator != '':
+            out_file.writelines('\t<RuleGroup name="" groupRelation="%s">\n' % operator)
+          
+          for onmatch in rules[event_type][operator].keys():
+            out_file.writelines('\t\t<%s onmatch="%s">\n' % (event_type, onmatch))
+            
+            for rule in rules[event_type][operator][onmatch]:
+              #print(rule)
+              out_file.writelines('\t\t\t<{0} condition="{1}">{2}</{0}>\n'.format(rule['field'], rule['filter'], rule['value']))
+            
+            out_file.writelines('\t\t</%s>\n' % event_type)
+          
+          if operator != '':
+            out_file.writelines('\t</RuleGroup>\n\n')
+    
     out_file.writelines('\t</EventFiltering>\n')
     out_file.writelines('</Sysmon>')
 
@@ -84,48 +90,46 @@ def write_footer(output_file):
 
 def parse_file(input_file):
   output_file = os.path.splitext(input_file)[0] + '.xml'
-  rule_group = []
-  rule_config = None
-  header_written = False
   
   header_info = {
     'check_revocation': False
   }
+  rules = {}
+  
+  curr_event = None
+  curr_operator = None
+  curr_condition = None
   
   with open(input_file, 'r') as in_file:
     for line in in_file.readlines():
-      # The following operations are ordered by their likelihood of occurence 
-      # (rules more frequently than event type headers, etc.) to minimize 
-      # unnecessary checks for a minor performance improvement
+      event_data = None
       
-      data = RULE_PATT.match(line)
+      if 'HashingAlgorithms:' in line:
+        header_info['algorithms'] = line.split(':')[1].strip()
+      elif 'CRL checking:' in line:
+        header_info['check_revocation'] = 'enabled' in line
+      elif NEW_EVENT_PATT.match(line):
+        event_data = NEW_EVENT_PATT.match(line).groupdict()
+      elif OLD_EVENT_PATT.match(line):
+        event_data = OLD_EVENT_PATT.match(line).groupdict()
+      elif RULE_PATT.match(line):
+        rules[curr_event][curr_operator][curr_condition].append(RULE_PATT.match(line).groupdict())
       
-      if data is not None:
-        # Line is an event rule
-        rule_group.append(data.groupdict())
-      else:
-        data = EVENT_PATT.match(line)
-      
-        if data is not None:
-          # Line is a new event type header
-          if not header_written:
-            # First event type encounter; write the header
-            write_header(output_file, header_info)
-            header_written = True
+      if event_data is not None:
+        curr_event = event_data['event_type']
+        curr_operator = event_data['operator'].lower() if 'operator' in event_data else ''
+        curr_condition = event_data['onmatch']
+        
+        if curr_event not in rules:
+          rules[curr_event] = {}
           
-          # Write out existing rule_group and re-initalize the rule list
-          if rule_config is not None:
-            write_rule_group(output_file, rule_config, rule_group)
-          
-          rule_group = []
-          rule_config = data.groupdict()
-          
-        elif 'HashingAlgorithms:' in line:
-          header_info['algorithms'] = line.split(':')[1].strip()
-        elif 'CRL checking:' in line:
-          header_info['check_revocation'] = 'enabled' in line
-    
-    write_footer(output_file)
+        if curr_operator not in rules[curr_event]:
+          rules[curr_event][curr_operator] = {}
+        
+        if curr_condition not in rules[curr_event][curr_operator]:
+          rules[curr_event][curr_operator][curr_condition] = []
+  
+  write_output(output_file, header_info, rules)
 
 
 
@@ -137,4 +141,5 @@ def main():
     print('USAGE: %s <path to sysmon config export>' % sys.argv[0])
 
 
-main()
+if __name__ == '__main__':
+  main()
