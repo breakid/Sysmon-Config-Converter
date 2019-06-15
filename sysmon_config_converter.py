@@ -43,7 +43,7 @@ import sys
 import os
 
 # Matches an event type header that precedes a collection of associated rules
-OLD_EVENT_PATT = re.compile(" - (?P<event_type>.*?)\s*onmatch: (?P<onmatch>.*)'")
+OLD_EVENT_PATT = re.compile(" - (?P<event_type>.*?)\s*onmatch: (?P<onmatch>.*)")
 
 # Newer versions of Sysmon allow users to specify a boolean operator for the rulegroup
 NEW_EVENT_PATT = re.compile(" - (?P<event_type>.*?)\s*onmatch: (?P<onmatch>.*?)\s{3,}combine rules using '(?P<operator>.*)'")
@@ -54,7 +54,7 @@ RULE_PATT = re.compile("\t(?P<field>.*?)\s*filter: (?P<filter>.*?)\s{3,}value: '
 
 def write_output(output_file, header_info, rules):
   with open(output_file, 'w') as out_file:
-    out_file.writelines('<Sysmon schemaversion="4.21">\n')
+    out_file.writelines('<Sysmon schemaversion="0.00">\n')
     out_file.writelines('\t<HashAlgorithms>%s</HashAlgorithms>\n' % header_info['algorithms'].lower())
     
     if header_info['check_revocation']:
