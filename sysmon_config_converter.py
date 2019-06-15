@@ -53,8 +53,10 @@ RULE_PATT = re.compile("\t(?P<field>.*?)\s*filter: (?P<filter>.*?)\s{3,}value: '
 
 
 def write_output(output_file, header_info, rules):
+  schema_version = raw_input('Schema Version (found using "sysmon.exe -s"): ')
+
   with open(output_file, 'w') as out_file:
-    out_file.writelines('<Sysmon schemaversion="0.00">\n')
+    out_file.writelines('<Sysmon schemaversion="%s">\n' % schema_version)
     out_file.writelines('\t<HashAlgorithms>%s</HashAlgorithms>\n' % header_info['algorithms'].lower())
     
     if header_info['check_revocation']:
